@@ -1,0 +1,90 @@
+---
+title: "Statistics on OSM data"
+author: "Liolia Bajemon"
+format: html
+editor: visual
+---
+
+### Set-up
+
+```{r load_packages}
+library(sf)
+library(tidyverse)
+```
+
+```{r read_input_data}
+tab_key_value = read.csv("input_data/tab_key_value.csv") %>% 
+  filter(key != "natural" | value != "water") %>% 
+  filter(key != "waterway" | value != "river") %>% 
+  select(-"group")
+zones = st_read("input_data/zones.shp")
+```
+
+### Calculate statistics for OSM data
+
+```{r def_function}
+stat_osm = function(fid, key, value, type){
+if(file.exists(glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp"))){
+  
+  # read file
+  file = st_read(glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp"))
+  
+  # initialize area and length
+  poly_area = NA
+  line_length = NA
+  
+  # if the elements are lines, get their total length
+  if(type == "lines"){
+    line_length = file %>% 
+      # get area in m²
+      mutate(length = as.numeric(sf::st_length(geometry))) %>% 
+      # remove geometry 
+      st_drop_geometry() %>% 
+      # sum of area for each category
+      summarise(total_length = sum(length)) %>% 
+      as.numeric()
+  }
+  
+  # if the elements are polygons, get their total area
+  if(type == "polygons" | type == "multipolygons"){
+    poly_area = file %>% 
+      # get area in m²
+      mutate(area = as.numeric(sf::st_area(geometry))) %>% 
+      # remove geometry 
+      st_drop_geometry() %>% 
+      # sum of area for each category
+      summarise(total_area = sum(area)) %>% 
+      as.numeric()
+  }
+  
+  nb = nrow(file)
+  data_city = data.frame(id = fid,
+                      key = key,
+                      value = value,
+                      type = type,
+                      nb = nb,
+                      area = poly_area,
+                      length = line_length)
+  }
+}
+```
+
+```{r}
+# define a data frame with all possible combinations of OSM element and key-value pair.
+# 772 combinations
+combi = crossing(type = c("points", "lines", "polygons", "multipolygons"),
+                 tab_key_value)
+
+# run the function for each combination & each city
+for (i in 1:60){
+  id_city = zones$id[i]
+  data_res = pmap_dfr(
+    list(fid = id_city,
+         key = combi$key,
+         value = combi$value,
+         type = combi$type),
+    stat_osm
+    )
+  write.csv(data_res, glue::glue("data/osm_stat/osm_stat_{id_city}.csv"), row.names = FALSE)
+}
+```

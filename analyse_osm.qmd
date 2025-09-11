@@ -1,0 +1,24 @@
+---
+title: "Analyse OSM data"
+author: "Liolia Bajemon"
+format: html
+editor: visual
+---
+
+### Set-up
+
+```{r packages, warning = FALSE}
+library(tidyverse)
+```
+
+```{r read_datasets}
+tab_key_value = read.csv("input_data/tab_key_value.csv") %>% 
+  mutate(keyval = paste0(key, "-", value)) %>% 
+  select(c("group", "keyval"))
+```
+
+```{r}
+file = read.csv(glue::glue("data/osm_stat/osm_stat_{fid}.csv")) %>% 
+  mutate(keyval = paste0(key, "-", value)) %>% 
+  left_join(tab_key_value, by = "keyval")
+```

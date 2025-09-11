@@ -1,0 +1,149 @@
+---
+title: "Collect OSM data for riverfronts"
+format: html
+editor: visual
+author: Lise Vaudor, Liolia Bajemon
+---
+
+#### Set-up
+
+```{r read_libraries}
+library(osmdata)
+library(osmextract)
+library(sf)
+library(tidyverse)
+```
+
+#### Read data
+
+```{r}
+# Read study areas, i.e. river corridor in which we will extract the OSM elements
+# we have one polygon for each studied city (n = 60)
+areas = st_read("input_data/zones.shp") %>% 
+  mutate(name = paste0("shp_", id)) %>% 
+  # write path for saving the polygon
+  mutate(path = paste0("data/study_areas/", name, ".shp")) %>%
+  # write path for saving the OSM results
+  mutate(path_results = paste0("data/osmdata/", name))
+
+# write shapefile for each individual polygon
+areas_wr = areas %>% 
+  group_by(path) %>% 
+  tidyr::nest() %>% 
+  mutate(data = purrr::map2(.x = data, .y = path, ~sf::st_write(obj = .x, dsn = .y, delete_dsn = TRUE)))
+
+# Read table of key-values which you want to extract
+tab_key_value = read.csv("input_data/tab_key_value.csv")
+```
+
+#### Extract data
+
+```{r def_save_osmdata}
+save_osmdata = function(key, value, shape_name, dir_name = "data/osm_data"){
+  # the extraction is carried out for the bounding box of the shape
+  if(is.character(shape_name)){
+    if(file.exists(shape_name)){
+      shape = sf::st_read(shape_name, quiet=TRUE)}
+    else{
+          shape = get(shape_name)}
+      shape_name = stringr::str_extract(shape_name,
+                                        "[^\\/]*(?=\\.shp)")
+  }
+  else{
+    shape = shape_name
+    shape_name = as.character(substitute(shape_name))
+  }
+  # keep just file name as stripped_shape_name (to name the results directory)
+  if(!dir.exists(glue::glue("{dir_name}/{shape_name}"))){
+    dir.create(glue::glue("{dir_name}/{shape_name}"),
+               recursive = TRUE)
+  }
+  # Check if key-value for this shape has already been extracted
+  file_done_already = glue::glue("{dir_name}/{shape_name}/done.csv")
+  if(file.exists(file_done_already)){
+    done_already = read.csv(file_done_already)
+    its_done_already = done_already %>%
+      dplyr::filter(keys == key,values == value) %>%
+      nrow()
+    if(its_done_already > 0){return()}
+  }
+  # If not, then consider bounding box and divide it into a grid such that
+  # each cell is less than 5 squared kilometers on average
+  bbox = sf::st_bbox(shape)
+  bbox_sf = sf::st_as_sfc(bbox)
+  ngrid = ceiling((sqrt(sf::st_area(shape) %>% 
+                        as.numeric())/1000)/5)
+  mygrid = sf::st_make_grid(bbox_sf, 
+                            n = c(ngrid, ngrid)) %>%
+    purrr::map(sf::st_bbox)
+  # The extraction of one cell is carried out by function get_result_grid()
+  get_result_grid = function(bbox){
+    tryCatch({
+      raw_result = osmdata::opq(bbox)%>%
+        osmdata::add_osm_feature(key = key, value = value) %>%
+        osmdata::osmdata_sf()
+      
+      Sys.sleep(runif(1, 1, 3)) # pause
+      
+      # write the results in various shapefiles according to geometry
+      for(type in c("osm_points",
+                    "osm_lines",
+                    "osm_polygons",
+                    "osm_multilines",
+                    "osm_multipolygons")){
+      if(!is.null(raw_result[[type]])){
+        result = raw_result[[type]]
+          if(nrow(result)>0){
+            if(!("osm_id" %in% colnames(result))){
+              result = result %>%
+                dplyr::mutate(osm_id = rownames(result))}
+            result = result %>%
+                dplyr::select(osm_id)
+            osmdata_file = glue::glue("{dir_name}/{shape_name}/{key}-{value}-{type}.shp")
+            ### Intersect the results with the real polygon shape 
+            # instead of the bbox 
+            intersection = st_intersection(result, shape)
+            if(nrow(intersection) > 0){
+              sf::st_write(intersection, dsn = osmdata_file, append = TRUE)
+            }
+          }
+        }
+      }
+    }, error = function(e){
+      message(paste0("erreur : ", e$message))
+      return(NULL)
+    })
+  }
+  data = purrr::map(mygrid, get_result_grid)
+  # Once the data has been saved for all cells of the grid, keep in mind that the extraction has been done
+  # for this shape, and this combination key-value
+  readr::write_csv(tibble::tibble(keys = key, values = value),
+                   glue::glue("{dir_name}/{shape_name}/done.csv"),
+                   append = TRUE, 
+                   col_names = TRUE)
+}
+```
+
+```{r def_save_osm_results}
+
+save_osm_results = function(shape_name){
+    shape = areas %>% 
+      filter(name == shape_name) %>% 
+      st_as_sfc() %>% 
+      st_transform(crs = 4326) 
+    purrr::map2(.x = tab_key_value$key,
+                .y = tab_key_value$value,
+                .f = save_osmdata,
+                shape_name = shape_name)
+    result = paste(shape_name, "done")
+   return(result)
+}
+```
+
+```{r run_functions}
+for(i in 1:60){
+  print(i)
+  print(areas$ville[i])
+  save_osm_results(areas$path[i])
+}
+```
