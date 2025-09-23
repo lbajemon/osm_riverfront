@@ -9,16 +9,74 @@ editor: visual
 
 ```{r packages, warning = FALSE}
 library(tidyverse)
+library(sf)
 ```
 
 ```{r read_datasets}
 tab_key_value = read.csv("input_data/tab_key_value.csv") %>% 
   mutate(keyval = paste0(key, "-", value)) %>% 
   select(c("group", "keyval"))
+
+combinations = read.csv("input_data/tab_combinations.csv") %>% 
+  mutate(keyval = paste0(key, "-", value)) %>% 
+  left_join(tab_key_value, by = "keyval") 
+
+# If error "Loop 1 is not valid: Edge 2 is degenerate (duplicate vertex)" then use
+# sf_use_s2(FALSE)
+sf_use_s2(TRUE)
+zones_wo_Brisbane = st_read("input_data/all_riverfronts_4326.shp") %>% 
+  filter(ville != "Brisbane") %>% 
+  mutate(area = st_area(geometry))
+
+sf_use_s2(FALSE)
+brisbane = st_read("input_data/all_riverfronts_4326.shp") %>% 
+  filter(ville == "Brisbane") %>% 
+  mutate(area = st_area(geometry))
 ```
 
+### Run functions
+
+```{r def_function}
+analyse_osm = function(fid){
+
+  # get total area of the selected zone 
+  zone_area = zones$area[zones$id == fid]
+
+  print(fid)
+  # read file with statistics on OSM elements
+  file = read.csv(glue::glue("data/osm_stat/osm_stat_{fid}.csv")) %>% 
+    mutate(keyval = paste0(key, "-", value)) %>% 
+    left_join(combinations, by = "keyval") %>% 
+    # group by type of elements
+    group_by(group) %>% 
+    # get total area/length/number of each type of element
+    mutate(nb_tot = sum(nb), 
+           area_tot = sum(area, na.rm = TRUE),
+           length_tot = sum(length, na.rm = TRUE)) %>% 
+    select(c("group", "nb_tot", "area_tot", "length_tot")) %>% 
+    unique() %>% 
+    mutate(area_rel = area_tot/zone_area*100) %>% 
+    mutate(length_rel = length_tot/zone_area*100) %>% 
+    mutate(n_perc = nb_tot/sum(file$nb_tot)*100)
+  
+  write.csv(file, glue::glue("data/osm_analyse/osm_analyse_{fid}.csv"))
+  print("done")
+}
+```
+
+```{r run_function}
+sf_use_s2(TRUE)
+zones = zones_wo_Brisbane
+zones %>% 
+  mutate(zones = purrr::map(id, analyse_osm))
+
+sf_use_s2(FALSE)
+zones = brisbane
+analyse_osm(zones$id)
+```
+
+### Results
+
 ```{r}
-file = read.csv(glue::glue("data/osm_stat/osm_stat_{fid}.csv")) %>% 
-  mutate(keyval = paste0(key, "-", value)) %>% 
-  left_join(tab_key_value, by = "keyval")
+
 ```

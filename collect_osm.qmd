@@ -19,12 +19,13 @@ library(tidyverse)
 ```{r}
 # Read study areas, i.e. river corridor in which we will extract the OSM elements
 # we have one polygon for each studied city (n = 60)
-areas = st_read("input_data/zones.shp") %>% 
+areas = st_read("input_data/all_riverfronts_4326.shp") %>%
   mutate(name = paste0("shp_", id)) %>% 
-  # write path for saving the polygon
+  # write path for saving the study zone 
   mutate(path = paste0("data/study_areas/", name, ".shp")) %>%
   # write path for saving the OSM results
-  mutate(path_results = paste0("data/osmdata/", name))
+  mutate(path_results = paste0("data/osmdata/", name)) %>% 
+  select(c("ville", "id", "geometry", "name", "path", "path_results"))
 
 # write shapefile for each individual polygon
 areas_wr = areas %>% 
@@ -48,8 +49,7 @@ save_osmdata = function(key, value, shape_name, dir_name = "data/osm_data"){
           shape = get(shape_name)}
       shape_name = stringr::str_extract(shape_name,
                                         "[^\\/]*(?=\\.shp)")
-  }
-  else{
+  } else{
     shape = shape_name
     shape_name = as.character(substitute(shape_name))
   }
@@ -79,8 +79,15 @@ save_osmdata = function(key, value, shape_name, dir_name = "data/osm_data"){
   # The extraction of one cell is carried out by function get_result_grid()
   get_result_grid = function(bbox){
     tryCatch({
-      raw_result = osmdata::opq(bbox)%>%
-        osmdata::add_osm_feature(key = key, value = value) %>%
+bbox_vec = c(
+  bbox["xmin"],
+  bbox["ymin"],
+  bbox["xmax"],
+  bbox["ymax"]
+)
+names(bbox_vec) <- c("xmin", "ymin", "xmax", "ymax")
+
+raw_result = osmdata::opq(bbox = bbox_vec) %>%        osmdata::add_osm_feature(key = key, value = value) %>%
         osmdata::osmdata_sf()
       
       Sys.sleep(runif(1, 1, 3)) # pause
@@ -141,9 +148,12 @@ save_osm_results = function(shape_name){
 ```
 
 ```{r run_functions}
-for(i in 1:60){
+
+for(i in 1:30){
   print(i)
-  print(areas$ville[i])
-  save_osm_results(areas$path[i])
+  print(areas2$ville[i])
+  save_osm_results(areas2$path[i])
 }
+
+# error for Brisbane (i = 18), use "sf_use_s2(FALSE)" before running the function for this entity 
 ```

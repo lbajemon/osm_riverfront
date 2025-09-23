@@ -13,11 +13,8 @@ library(tidyverse)
 ```
 
 ```{r read_input_data}
-tab_key_value = read.csv("input_data/tab_key_value.csv") %>% 
-  filter(key != "natural" | value != "water") %>% 
-  filter(key != "waterway" | value != "river") %>% 
-  select(-"group")
-zones = st_read("input_data/zones.shp")
+combinations = read.csv("input_data/tab_combinations.csv")
+areas = st_read("input_data/all_riverfronts_4326.shp")
 ```
 
 ### Calculate statistics for OSM data
@@ -26,38 +23,55 @@ zones = st_read("input_data/zones.shp")
 stat_osm = function(fid, key, value, type){
 if(file.exists(glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp"))){
   
-  # read file
-  file = st_read(glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp"))
+  # read file and make it valid
+  file = st_read(glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp")) %>% 
+    st_make_valid() 
   
+  # selection of valid types (the intersection results in multiple types of geometries)
+  valid_geom = switch(type,
+                      "points" = c("POINT", "MULTIPOINT"),
+                      "lines" = c("LINESTRING", "MULTILINESTRING"),
+                      "polygons" = c("POLYGON", "MULTIPOLYGON"),
+                      "multipolygons" = c("MULTIPOLYGON"),
+                      NULL)
+  
+  # only keep relevant elements
+  if (!is.null(valid_geom)) {
+  file_valid = file %>%
+    st_make_valid() %>%
+    filter(st_geometry_type(.) %in% valid_geom)
+  } else {
+  file_valid = file %>%
+    st_make_valid()
+  }
+  
+  # homogenize types of elements 
+  file_uniform = file_valid
+  if (type == "polygons" || type == "multipolygons") {
+    file_uniform = file_uniform %>%
+      mutate(geometry = st_cast(geometry, "MULTIPOLYGON"))
+  } else if (type == "lines") {
+    file_uniform = file_uniform %>%
+      mutate(geometry = st_cast(geometry, "MULTILINESTRING"))
+  }
+
   # initialize area and length
   poly_area = NA
   line_length = NA
   
   # if the elements are lines, get their total length
   if(type == "lines"){
-    line_length = file %>% 
-      # get area in m²
-      mutate(length = as.numeric(sf::st_length(geometry))) %>% 
-      # remove geometry 
-      st_drop_geometry() %>% 
-      # sum of area for each category
-      summarise(total_length = sum(length)) %>% 
-      as.numeric()
+    file_uniform = st_transform(file_uniform, 3857) # metric projection
+    line_length = sum(st_length(file_uniform)) # total length
   }
   
   # if the elements are polygons, get their total area
   if(type == "polygons" | type == "multipolygons"){
-    poly_area = file %>% 
-      # get area in m²
-      mutate(area = as.numeric(sf::st_area(geometry))) %>% 
-      # remove geometry 
-      st_drop_geometry() %>% 
-      # sum of area for each category
-      summarise(total_area = sum(area)) %>% 
-      as.numeric()
+    file_uniform = st_transform(file_uniform, 3857) # metric projection 
+    poly_area = sum(st_area(file_uniform)) # total area 
   }
   
-  nb = nrow(file)
+  nb = nrow(file_uniform)
   data_city = data.frame(id = fid,
                       key = key,
                       value = value,
@@ -70,19 +84,14 @@ if(file.exists(glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp"
 ```
 
 ```{r}
-# define a data frame with all possible combinations of OSM element and key-value pair.
-# 772 combinations
-combi = crossing(type = c("points", "lines", "polygons", "multipolygons"),
-                 tab_key_value)
-
 # run the function for each combination & each city
-for (i in 1:60){
-  id_city = zones$id[i]
+for (i in 1:30){
+  id_city = areas$id[i]
   data_res = pmap_dfr(
     list(fid = id_city,
-         key = combi$key,
-         value = combi$value,
-         type = combi$type),
+         key = combinations$key,
+         value = combinations$value,
+         type = combinations$type),
     stat_osm
     )
   write.csv(data_res, glue::glue("data/osm_stat/osm_stat_{id_city}.csv"), row.names = FALSE)
