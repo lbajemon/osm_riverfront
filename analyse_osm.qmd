@@ -9,16 +9,433 @@ editor: visual
 
 ```{r packages, warning = FALSE}
 library(tidyverse)
+library(sf)
+library(FactoMineR)
+library(rnaturalearth)
+library(cowplot)
+library(ggplot2)
 ```
 
 ```{r read_datasets}
-tab_key_value = read.csv("input_data/tab_key_value.csv") %>% 
+tab_key_value = read.csv("input_data/tab_key_value.csv", sep = ";", encoding = "UTF-8") %>%
   mutate(keyval = paste0(key, "-", value)) %>% 
   select(c("group", "keyval"))
+
+combinations = read.csv("input_data/tab_combinations.csv", sep = ",") %>% 
+  mutate(keyval = paste0(key, "-", value)) %>% 
+  left_join(tab_key_value, by = "keyval") 
+
+# If error "Loop 1 is not valid: Edge 2 is degenerate (duplicate vertex)" then use
+# sf_use_s2(FALSE)
+sf_use_s2(TRUE)
+zones_wo_loop = st_read("input_data/all_riverfronts_4326.shp") %>% 
+  filter(ville != "Brisbane" & ville != "Windsor-Detroit") %>% 
+  mutate(area = st_area(geometry))
+
+sf_use_s2(FALSE)
+loop = st_read("input_data/all_riverfronts_4326.shp") %>% 
+  filter(ville == "Brisbane" | ville == "Windsor-Detroit") %>% 
+  mutate(area = st_area(geometry))
+```
+
+### Run functions
+
+```{r def_function}
+analyse_osm = function(fid){
+
+  # get total area of the selected zone 
+  zone_area = zones$area[zones$id == fid]
+
+  print(fid)
+  # read file with statistics on OSM elements
+  myfile = read.csv(glue::glue("data/osm_stat/osm_stat_{fid}.csv")) %>% 
+    mutate(keyval = paste0(key, "-", value)) %>% 
+    left_join(combinations, by = "keyval") %>% 
+    # group by type of elements
+    group_by(group) %>% 
+    # get total area/length/number of each type of element
+    dplyr::mutate(nb_tot = sum(nb), 
+           area_tot = sum(area, na.rm = TRUE),
+           length_tot = sum(length, na.rm = TRUE)) %>% 
+    select(c("group", "nb_tot", "area_tot", "length_tot")) %>% 
+    unique() %>% 
+    dplyr::mutate(area_rel = area_tot/zone_area*100) %>% 
+    dplyr::mutate(length_rel = length_tot/zone_area) %>% 
+    dplyr::mutate(n_rel = nb_tot/zone_area) %>% 
+    ungroup() %>% 
+    dplyr::mutate(n_perc = nb_tot/sum(nb_tot)*100)
+  
+  write.csv(myfile, glue::glue("data/osm_analyse/osm_analyse_{fid}.csv"))
+  print("done")
+}
+```
+
+```{r run_function}
+sf_use_s2(TRUE)
+zones = zones_wo_loop
+zones %>% 
+  mutate(zones = purrr::map(id, analyse_osm))
+
+sf_use_s2(FALSE)
+zones = loop
+zones %>% 
+  mutate(zones = purrr::map(id, analyse_osm))
+```
+
+#### Bind all results
+
+```{r bind_results}
+read_results = function(fid, ville) {
+  read.csv(glue::glue("data/osm_analyse/osm_analyse_{fid}.csv")) %>%
+    select(-"X") %>%                    
+    mutate(id = fid,
+           city = ville)
+}
+
+zones = st_read("input_data/all_riverfronts_4326.shp")
+data = purrr::map2_dfr(zones$id, zones$ville, read_results)
+```
+
+### Correlations
+
+#### Two variables correlations
+
+```{r}
+envir = data %>% 
+  filter(group == "environnement")
+cor.test(envir$nb_tot, envir$area_tot)
+# 0.59
+cor.test(envir$n_rel, envir$area_rel)
+# 0.33
+
+leisure = data %>% 
+  filter(group == "loisirs")
+cor.test(leisure$nb_tot, leisure$area_tot)
+# 0.83
+cor.test(leisure$n_rel, leisure$area_rel)
+# 0.35
+cor.test(leisure$n_rel, leisure$length_rel)
+# -0.08
+
+religion = data %>% 
+  filter(group == "religion")
+cor.test(religion$nb_tot, religion$area_tot)
+# 0.07
+cor.test(religion$n_rel, religion$area_rel)
+# 0.18
+
+amenity = data %>% 
+  filter(group == "aménité")
+cor.test(amenity$nb_tot, amenity$area_tot)
+# 0.84
+cor.test(amenity$n_rel, amenity$area_rel)
+# 0.19
+cor.test(amenity$n_rel, amenity$length_rel)
+# 0.77
+
+infras = data %>% 
+  filter(group == "infrastructure")
+cor.test(infras$nb_tot, infras$area_tot)
+# 0.85
+cor.test(infras$n_rel, infras$area_rel)
+# - 0.03
+cor.test(infras$n_rel, infras$length_rel)
+# 0.88
+
+industry = data %>% 
+  filter(group == "industrie")
+cor.test(industry$nb_tot, industry$area_tot)
+# 0.99
+cor.test(industry$n_rel, industry$area_rel)
+# 0.74
+
+bati = data %>% 
+  filter(group == "bâti")
+cor.test(bati$nb_tot, bati$area_tot)
+# 0.92
+cor.test(bati$n_rel, bati$area_rel)
+# 0.56
+
+agri = data %>% 
+  filter(group == "agriculture")
+cor.test(agri$nb_tot, agri$area_tot)
+# 0.11
+cor.test(agri$n_rel, agri$area_rel)
+# 0.75
+```
+
+#### ACP
+
+```{r}
+### prepare dataset 
+continents = st_read("input_data/all_riverfronts_4326.shp") %>% 
+  st_drop_geometry() %>% 
+  select(c("ville", "continent"))
+
+# reshape from long to wide format
+data_acp = data %>% 
+  select(c("group", "n_rel", "area_rel", "length_rel", "city")) %>% 
+  pivot_wider(id_cols = city,
+              names_from = group,
+              values_from = c(n_rel, area_rel, length_rel)) %>% 
+   mutate(across(everything(), ~replace_na(.x, 0))) %>% 
+  # remove lengths columns which equal 0
+  # as well as lengths for infrastructure and amenity bc it is highly correlated with n
+  # only keep length for leisure
+  select(-c("length_rel_religion", "length_rel_infrastructure", "length_rel_environnement", "length_rel_aménité", "length_rel_bâti", "length_rel_industrie", "length_rel_agriculture")) %>% 
+  # remove n for which it is highly correlated with area
+  select(-c("n_rel_industrie", "n_rel_bâti", "n_rel_agriculture")) %>% 
+  left_join(continents, by = join_by("city" == "ville")) %>% 
+  column_to_rownames(var = "city") %>% 
+  mutate(continent = as.factor(continent)) 
 ```
 
 ```{r}
-file = read.csv(glue::glue("data/osm_stat/osm_stat_{fid}.csv")) %>% 
-  mutate(keyval = paste0(key, "-", value)) %>% 
-  left_join(tab_key_value, by = "keyval")
+res = PCA(data_acp, quali.sup = which(names(data_acp) == "continent"), graph = TRUE)
+
+# dynamic exploration of the results
+explor::explor(res)
+
+cat_var = factor(c("Infrastructure", "Religion", "Loisirs", "Environnement",
+                   "Aménité", "Infrastructure", "Religion", "Loisirs", 
+                   "Environnement", "Aménité", "Bâti", "Agriculture", 
+                   "Industrie", "Loisirs"))
+
+palette_cat = c("Agriculture" = "#ffd92f", "Aménité" = "#fdb462", "Bâti" = "#eac1f7", "Environnement" = "#b3de69", "Industrie" = "#bf812d", "Infrastructure" = "#8dd3c7", "Loisirs" = "#f781bf", "Religion" = "#fb8072")
+
+shape_continent = c(15, 16, 17, 3, 18, 4)
+
+# static plot
+fviz_pca_biplot(res, 
+                geom.var = "arrow", # categories (variables) 
+                arrowsize = 1, # size of the arrow, to make it wider
+                labelsize = 2, # size of the labels of the cities (individuals)
+                repel = TRUE, # avoid overlapping of labels
+                geom.ind = c("point"),
+                col.ind = "black",
+                pointsize = 3, # size of points
+                habillage = data_acp$continent,
+                col.var = cat_var,
+                mean.point = FALSE,
+                legend.title = list(fill = "Continent", color = "Catégorie")) +
+  scale_color_manual(values = palette_cat, aesthetics = "color") +
+  scale_shape_manual(values = shape_continent) +
+  guides(shape = "none") +
+  labs(caption = "Réalisation : L. Bajemon, octobre 2025",
+       title = "",
+       fill = "continent") +
+  theme_bw() +
+  theme(legend.position = "right",
+        plot.caption = element_text(color = "#d9d9d9", hjust = 1.5))
+
+ggsave("results/acp_osm_riverfronts.svg")
+
+# legend of forms (continents)
+legend_data = data.frame(continent = factor(levels_continent, levels = levels_continent))
+
+ggplot(legend_data,
+       aes(x = 1, y = continent, shape = continent)) +
+  geom_point(size = 3, 
+             color = "black") +
+  scale_shape_manual(values = shape_continent) +
+  theme_void() +
+  labs(shape = "Continent")
+
+ggsave("results/acp_legend_shape.svg")
+```
+
+### Barplots
+
+##### For each city
+
+```{r make_barplot}
+make_barplot = function(fid, city){
+  
+  print(city)
+  
+  # read file 
+  file = read.csv(glue::glue("data/osm_analyse/osm_analyse_{fid}.csv")) %>% 
+    mutate(area_perc = area_tot/sum(area_tot)*100) %>% 
+    mutate(length_perc = length_tot/sum(length_tot)*100) %>% 
+    pivot_longer(cols = c("n_perc", "area_perc", "length_perc"),
+                 names_to = "perc",
+                 values_to = "valeur") %>% 
+    select(c("group", "perc", "valeur"))
+  
+  file %>% 
+    filter(valeur != 0) %>% 
+    ggplot(aes(x = valeur,
+               y = perc,
+               fill = group)) +
+     geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("agriculture" = "#ffd92f", "aménité" = "#fdb462", "bâti" = "#eac1f7", "environnement" = "#b3de69", "industrie" = "#bf812d", "infrastructure" = "#8dd3c7", "loisirs" = "#f781bf", "religion" = "#fb8072")) +
+    labs(title = paste("Le front d'eau sur OSM à", city),
+         y = "",
+         x = "%",
+         fill = "Catégorie",
+         caption = "Réalisation : L. Bajemon, octobre 2025") +
+    scale_y_discrete(labels = c("n_perc" = "Points", "area_perc" = "Polygones", "length_perc" = "Lignes")) +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom",
+          plot.caption = element_text(color = "#d9d9d9", hjust = 1))
+  
+  ggsave(glue::glue("results/barplots/barplot_osm_{fid}.svg"), width = 2000, height = 1300, units = "px")
+  
+  print("barplot saved")
+}
+```
+
+```{r run_barplot}
+all_riverfronts %>% 
+  mutate(data = map2(.x = id,
+                     .y = ville,
+                     .f = make_barplot))
+```
+
+##### Combine barplots
+
+### Calculate coverage
+
+The OpenStreetMap coverage of the cities is not equal everywhere. For example, there are a lot of elements in Chicago, but only a few in Srinagar. We will calculate the % of coverage of the area by OSM elements.
+
+```{r def_read_keyvalue}
+read_keyvalue = function(fid, key, value, type){
+  file_path = glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp")
+  if(file.exists(file_path)){
+      file = st_read(file_path) %>% 
+        st_make_valid() 
+      return(file)
+  } else{
+    return(st_sf(geometry = st_sfc(), crs = 4326))
+  }
+}
+```
+
+#### Surface
+
+```{r coverage_area}
+coverage_area = function(fid){
+  
+  # read every file and union them 
+  osm_assemble = pmap_dfr(list(fid = fid,
+                               key = combinations_area$key,
+                               value = combinations_area$value,
+                               type = combinations_area$type),
+                          read_keyvalue) %>% 
+    # homogenize types
+    filter(st_geometry_type(geometry) %in% c("POLYGON", "MULTIPOLYGON")) %>% 
+    mutate(geometry = st_cast(geometry, "MULTIPOLYGON"))
+  
+  # union everything
+  osm_union = st_union(osm_assemble) 
+  
+  # calculate area
+  osm_union_sf = st_sf(geometry = osm_union) %>%
+    mutate(area = st_area(geometry)) %>% 
+    mutate(id = fid)
+  
+  return(osm_union_sf)
+}
+```
+
+```{r run_function}
+combinations_area = read.csv("input_data/tab_combinations.csv", sep = ",") %>% 
+  filter(type %in% c("polygons", "multipolygons"))
+
+all_riverfronts = st_read("input_data/all_riverfronts_4326.shp")
+
+res_coverage_area = pmap_dfr(list(fid = all_riverfronts$id), coverage_area)
+st_write(res_coverage_area, "results/coverage_osm_riverfronts.shp")
+
+res_coverage_area_raw = res_coverage_area %>% 
+  st_drop_geometry() %>% 
+  rename(area_osm = area)
+```
+
+#### Number of points
+
+```{r coverage_points}
+coverage_points = function(fid){
+  
+  # read every file and union them 
+  osm_assemble = pmap_dfr(list(fid = fid,
+                               key = combinations_points$key,
+                               value = combinations_points$value,
+                               type = "points"),
+                          read_keyvalue) %>% 
+    # homogenize types
+    filter(st_geometry_type(geometry) == "POINT")
+  
+  # union everything to remove doublons 
+  osm_union = st_union(osm_assemble)
+  
+  # extract unique points from the union geometry
+  unique_points = st_cast(osm_union, "POINT")
+  
+  # calculate number of points
+  nb_points = length(unique_points)
+  
+  tibble(id = fid,
+         nb_points = nb_points)
+}
+```
+
+```{r run function}
+res_points = pmap_dfr(list(fid = all_riverfronts$id), coverage_points)
+st_write(res_points, "results/nb_points_osm_riverfronts.shp")
+```
+
+#### Combine everything
+
+```{r}
+
+results_coverage = all_riverfronts %>% 
+  # get total area of the riverfront
+  mutate(area = st_area(geometry)) %>% 
+  # join nb of points
+  left_join(res_points, by = "id") %>% 
+  # join area of osm coverage 
+  left_join(res_coverage_area_raw, by = "id") %>% 
+  select(c("ville", "id", "nb_points", "area", "area_osm")) %>% 
+  # convert area to km²
+  mutate(area_km2 = conv_unit(as.numeric(results_coverage$area), "m2", "km2")) %>%
+  mutate(perc_osm_area = as.numeric(area_osm/area*100)) %>% 
+  mutate(perc_osm_points = nb_points/as.numeric(area_km2)) %>% 
+  st_centroid(geometry)
+
+st_write(results_coverage, "results/results_coverage.shp")
+```
+
+#### Map
+
+```{r map_results}
+world_map = ne_countries(scale = "medium", returnclass = "sf") %>% 
+  filter(name_sort != "Antarctica")
+
+world_map %>% 
+  ggplot() +
+  # world map 
+  geom_sf(fill = "#f0f0f1", color = "white", size = 0.2) +
+  # city points
+  geom_sf(data = results_coverage, 
+          aes(size = perc_osm_points,
+              fill = perc_osm_area),
+          color = "black",
+          shape = 21,
+          stroke = 0.1,
+          alpha = 1) +
+  scale_fill_distiller(palette = "YlOrRd",
+                        direction = 1) +
+  scale_size_continuous(range = c(2, 10)) +
+  # equal earth projection
+  coord_sf(crs = "+proj=eqearth") +
+  # theme
+  theme_void() +
+  theme(legend.position = "bottom",
+        legend.box = "vertical") +
+  labs(size = "Nombre de points / km²",
+       fill = "Surface couverte par OpenStreetMap (%)")
+
+ggsave("results/coverage_osm.svg", width = 4000, height = 2500, units = "px")
 ```
