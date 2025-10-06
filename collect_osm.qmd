@@ -18,13 +18,14 @@ library(tidyverse)
 
 ```{r}
 # Read study areas, i.e. river corridor in which we will extract the OSM elements
-# we have one polygon for each studied city (n = 60)
-areas = st_read("input_data/zones.shp") %>% 
+# we have one polygon for each studied city (n = 30)
+areas = st_read("input_data/all_riverfronts_4326.shp") %>%
   mutate(name = paste0("shp_", id)) %>% 
-  # write path for saving the polygon
+  # write path for saving the study zone 
   mutate(path = paste0("data/study_areas/", name, ".shp")) %>%
   # write path for saving the OSM results
-  mutate(path_results = paste0("data/osmdata/", name))
+  mutate(path_results = paste0("data/osmdata/", name)) %>% 
+  select(c("ville", "id", "geometry", "name", "path", "path_results"))
 
 # write shapefile for each individual polygon
 areas_wr = areas %>% 
@@ -33,7 +34,7 @@ areas_wr = areas %>%
   mutate(data = purrr::map2(.x = data, .y = path, ~sf::st_write(obj = .x, dsn = .y, delete_dsn = TRUE)))
 
 # Read table of key-values which you want to extract
-tab_key_value = read.csv("input_data/tab_key_value.csv")
+tab_key_value = read.csv("input_data/tab_key_value.csv", sep = ";", encoding = "UTF-8")
 ```
 
 #### Extract data
@@ -43,13 +44,12 @@ save_osmdata = function(key, value, shape_name, dir_name = "data/osm_data"){
   # the extraction is carried out for the bounding box of the shape
   if(is.character(shape_name)){
     if(file.exists(shape_name)){
-      shape = sf::st_read(shape_name, quiet=TRUE)}
+      shape = sf::st_read(shape_name, quiet = TRUE)}
     else{
           shape = get(shape_name)}
       shape_name = stringr::str_extract(shape_name,
                                         "[^\\/]*(?=\\.shp)")
-  }
-  else{
+  } else{
     shape = shape_name
     shape_name = as.character(substitute(shape_name))
   }
@@ -79,7 +79,16 @@ save_osmdata = function(key, value, shape_name, dir_name = "data/osm_data"){
   # The extraction of one cell is carried out by function get_result_grid()
   get_result_grid = function(bbox){
     tryCatch({
-      raw_result = osmdata::opq(bbox)%>%
+      bbox_vec = c(
+        bbox["xmin"],
+        bbox["ymin"],
+        bbox["xmax"],
+        bbox["ymax"]
+      )
+      names(bbox_vec) <- c("xmin", "ymin", "xmax", "ymax")
+
+
+      raw_result = osmdata::opq(bbox = bbox_vec) %>%        
         osmdata::add_osm_feature(key = key, value = value) %>%
         osmdata::osmdata_sf()
       
@@ -141,9 +150,20 @@ save_osm_results = function(shape_name){
 ```
 
 ```{r run_functions}
-for(i in 1:60){
+
+areas_ne = areas %>% 
+  filter(ville != "Brisbane" & ville != "Windsor-Détroit")
+
+for(i in 1:28){
   print(i)
-  print(areas$ville[i])
-  save_osm_results(areas$path[i])
+  print(areas_ne$ville[i])
+  save_osm_results(areas_ne$path[i])
 }
+```
+
+```{r}
+# error for Brisbane (i = 18) and Windsor-Detroit (i = 25), use "sf_use_s2(FALSE)" before running the function for these cities
+sf_use_s2(FALSE)
+save_osm_results(areas$path[25])
+save_osm_results(areas$path[18])
 ```
