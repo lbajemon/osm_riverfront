@@ -1,0 +1,9 @@
+"id","key","value","type","nb","area","length"
+348,"historic","castle","points",34,NA,NA
+348,"leisure","nature_reserve","points",3,NA,NA
+348,"leisure","park","points",4,NA,NA
+348,"leisure","park","polygons",1,14919.3624805063,NA
+348,"historic","castle","polygons",1,75308.4592631832,NA
+348,"landuse","residential","polygons",3,556459.956740868,NA
+348,"landuse","farmyard","polygons",2,14434.5413372368,NA
+348,"landuse","farmyard","points",7,NA,NA
