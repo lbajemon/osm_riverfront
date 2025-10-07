@@ -14,6 +14,8 @@ library(FactoMineR)
 library(rnaturalearth)
 library(cowplot)
 library(ggplot2)
+library(patchwork)
+library(ggpattern)
 ```
 
 ```{r read_datasets}
@@ -29,12 +31,12 @@ combinations = read.csv("input_data/tab_combinations.csv", sep = ",") %>%
 # sf_use_s2(FALSE)
 sf_use_s2(TRUE)
 zones_wo_loop = st_read("input_data/all_riverfronts_4326.shp") %>% 
-  filter(ville != "Brisbane" & ville != "Windsor-Detroit") %>% 
+  filter(ville != "Brisbane" & ville != "Windsor-Détroit") %>% 
   mutate(area = st_area(geometry))
 
 sf_use_s2(FALSE)
 loop = st_read("input_data/all_riverfronts_4326.shp") %>% 
-  filter(ville == "Brisbane" | ville == "Windsor-Detroit") %>% 
+  filter(ville == "Brisbane" | ville == "Windsor-Détroit") %>% 
   mutate(area = st_area(geometry))
 ```
 
@@ -287,13 +289,102 @@ make_barplot = function(fid, city){
 ```
 
 ```{r run_barplot}
-all_riverfronts %>% 
+zones %>% 
   mutate(data = map2(.x = id,
                      .y = ville,
                      .f = make_barplot))
 ```
 
 ##### Combine barplots
+
+```{r}
+make_big_barplot = function(fid, city){
+
+ file = read.csv(glue::glue("data/osm_analyse/osm_analyse_{fid}.csv")) %>% 
+    mutate(area_perc = area_tot/sum(area_tot)*100) %>% 
+    mutate(length_perc = length_tot/sum(length_tot)*100) %>% 
+    pivot_longer(cols = c("n_perc", "area_perc", "length_perc"),
+                 names_to = "perc",
+                 values_to = "valeur") %>% 
+    select(c("group", "perc", "valeur"))
+  
+myplot = file %>% 
+  filter(valeur != 0) %>% 
+  ggplot(aes(x = valeur,
+             y = perc,
+             fill = group,
+             pattern = perc)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("agriculture" = "#ffd92f", 
+                               "aménité" = "#fdb462", 
+                               "bâti" = "#eac1f7", 
+                               "environnement" = "#b3de69", 
+                               "industrie" = "#bf812d", 
+                               "infrastructure" = "#8dd3c7", 
+                               "loisirs" = "#f781bf", 
+                               "religion" = "#fb8072")) +
+  labs(title = city,
+       y = "",
+       x = "",
+       fill = "Catégorie") +
+  scale_y_discrete(labels = c("n_perc" = "Points", 
+                              "area_perc" = "Polygones", 
+                              "length_perc" = "Lignes")) +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        plot.title = element_text(size = 8),
+        axis.text.x = element_text(size = 6))
+}
+```
+
+```{r}
+# arranged by continent
+zones = zones %>% 
+  mutate(continent = factor(continent,
+                            levels = c("Afrique", "Amérique du Nord", "Amérique du Sud", "Asie", "Europe", "Océanie"))) %>% 
+  arrange(continent, ville)
+
+plot_list = map2(zones$id, zones$ville, make_big_barplot)
+wrap_plots(plot_list, nrow = 6, ncol = 5)
+
+# arranged by country
+zones = zones %>% 
+  mutate(pays = factor(pays,
+                       levels = c("Maroc", "Canada", "Etats-Unis", "Argentine", "Brésil", "Chine", "Inde", "Malaisie", "Thaïlande", "Vietnam", "Russie", "France", "Slovaquie", "Australie"))) %>% 
+  arrange(pays, ville)
+
+plot_list = map2(zones$id, zones$ville, make_big_barplot)
+wrap_plots(plot_list, nrow = 6, ncol = 5)
+ggsave("results/barplots_par_pays.svg", width = 2500, height = 2500, units = "px")
+
+## legend
+legend_data = data.frame(categorie = factor(c("Agriculture", "Aménité", "Bâti",
+                                              "Environnement", "Industrie",
+                                              "Infrastructure", "Loisirs",
+                                              "Religion")),
+                         levels = c("Agriculture", "Aménité", "Bâti", 
+                                    "Environnement", "Industrie", 
+                                    "Infrastructure", "Loisirs", "Religion"))
+col_categories = c("Agriculture" = "#ffd92f",
+                   "Aménité" = "#fdb462",
+                   "Bâti" = "#eac1f7",
+                   "Environnement" = "#b3de69",
+                   "Industrie" = "#bf812d",
+                   "Infrastructure" = "#8dd3c7",
+                   "Loisirs" = "#f781bf",
+                   "Religion" = "#fb8072")
+
+ggplot(legend_data,
+       aes(x = 1, y = categorie, fill = categorie)) +
+  geom_col() +
+  scale_fill_manual(values = col_categories, name = "Catégorie") +
+  theme_void() +
+  theme(legend.position = "bottom")
+ggsave("results/legend_categories.svg", width = 2500, height = 2500, units = "px")
+```
 
 ### Calculate coverage
 

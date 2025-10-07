@@ -2,3 +2,9 @@
 .Rhistory
 .RData
 .Ruserdata
+input_data/all_riverfronts.*
+input_data/riverfronts_trace/
+input_data/tab_key_value_add.csv
+results/
+trace_riverfronts.docx
+input_data/data_city_river_303.csv

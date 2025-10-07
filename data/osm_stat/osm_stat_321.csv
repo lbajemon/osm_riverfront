@@ -1,0 +1,13 @@
+"id","key","value","type","nb","area","length"
+321,"highway","footway","lines",1,NA,20.7690377915333
+321,"amenity","place_of_worship","points",30,NA,NA
+321,"building","temple","points",1,NA,NA
+321,"highway","footway","points",2,NA,NA
+321,"historic","monument","points",4,NA,NA
+321,"leisure","park","points",4,NA,NA
+321,"man_made","pier","points",1,NA,NA
+321,"tourism","attraction","points",1,NA,NA
+321,"amenity","place_of_worship","polygons",3,393.426317926263,NA
+321,"leisure","park","polygons",1,2319.38591042161,NA
+321,"historic","monument","polygons",1,199.191458351444,NA
+321,"highway","bus_stop","points",2,NA,NA

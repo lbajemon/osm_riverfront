@@ -1,0 +1,8 @@
+"id","key","value","type","nb","area","length"
+337,"highway","footway","lines",5,NA,5505.35589230734
+337,"highway","pedestrian","lines",2,NA,422.16353702356
+337,"highway","pedestrian","points",7,NA,NA
+337,"highway","footway","points",59,NA,NA
+337,"man_made","pier","points",2,NA,NA
+337,"natural","wetland","polygons",1,1300.68994977325,NA
+337,"landuse","residential","polygons",1,172630.066832781,NA
