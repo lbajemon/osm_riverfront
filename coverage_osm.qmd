@@ -1,0 +1,161 @@
+---
+title: "Calculate coverage of OSM data"
+author: "Liolia Bajemon"
+format: html
+editor: visual
+---
+
+### Set-up
+
+```{r packages, warning = FALSE}
+library(tidyverse)
+library(sf)
+library(rnaturalearth)
+library(ggplot2)
+library(patchwork)
+```
+
+### Calculate coverage
+
+The OpenStreetMap coverage of the cities is not equal everywhere. For example, there are a lot of elements in Chicago, but only a few in Srinagar. We will calculate the % of coverage of the area by OSM elements.
+
+```{r def_read_keyvalue}
+read_keyvalue = function(fid, key, value, type){
+  file_path = glue::glue("data/osm_data/shp_{fid}/{key}-{value}-osm_{type}.shp")
+  if(file.exists(file_path)){
+      file = st_read(file_path) %>% 
+        st_make_valid() 
+      return(file)
+  } else{
+    return(st_sf(geometry = st_sfc(), crs = 4326))
+  }
+}
+```
+
+#### Surface
+
+```{r coverage_area}
+coverage_area = function(fid){
+  
+  # read every file and union them 
+  osm_assemble = pmap_dfr(list(fid = fid,
+                               key = combinations_area$key,
+                               value = combinations_area$value,
+                               type = combinations_area$type),
+                          read_keyvalue) %>% 
+    # homogenize types
+    filter(st_geometry_type(geometry) %in% c("POLYGON", "MULTIPOLYGON")) %>% 
+    mutate(geometry = st_cast(geometry, "MULTIPOLYGON"))
+  
+  # union everything
+  osm_union = st_union(osm_assemble) 
+  
+  # calculate area
+  osm_union_sf = st_sf(geometry = osm_union) %>%
+    mutate(area = st_area(geometry)) %>% 
+    mutate(id = fid)
+  
+  return(osm_union_sf)
+}
+```
+
+```{r run_function}
+combinations_area = read.csv("input_data/tab_combinations.csv", sep = ",") %>% 
+  filter(type %in% c("polygons", "multipolygons"))
+
+all_riverfronts = st_read("input_data/all_riverfronts_4326.shp")
+
+res_coverage_area = pmap_dfr(list(fid = all_riverfronts$id), coverage_area)
+st_write(res_coverage_area, "results/coverage_osm_riverfronts.shp")
+
+res_coverage_area_raw = res_coverage_area %>% 
+  st_drop_geometry() %>% 
+  rename(area_osm = area)
+```
+
+#### Number of points
+
+```{r coverage_points}
+coverage_points = function(fid){
+  
+  # read every file and union them 
+  osm_assemble = pmap_dfr(list(fid = fid,
+                               key = combinations_points$key,
+                               value = combinations_points$value,
+                               type = "points"),
+                          read_keyvalue) %>% 
+    # homogenize types
+    filter(st_geometry_type(geometry) == "POINT")
+  
+  # union everything to remove doublons 
+  osm_union = st_union(osm_assemble)
+  
+  # extract unique points from the union geometry
+  unique_points = st_cast(osm_union, "POINT")
+  
+  # calculate number of points
+  nb_points = length(unique_points)
+  
+  tibble(id = fid,
+         nb_points = nb_points)
+}
+```
+
+```{r run function}
+res_points = pmap_dfr(list(fid = all_riverfronts$id), coverage_points)
+st_write(res_points, "results/nb_points_osm_riverfronts.shp")
+```
+
+#### Combine everything
+
+```{r}
+
+results_coverage = all_riverfronts %>% 
+  # get total area of the riverfront
+  mutate(area = st_area(geometry)) %>% 
+  # join nb of points
+  left_join(res_points, by = "id") %>% 
+  # join area of osm coverage 
+  left_join(res_coverage_area_raw, by = "id") %>% 
+  select(c("ville", "id", "nb_points", "area", "area_osm")) %>% 
+  # convert area to km²
+  mutate(area_km2 = conv_unit(as.numeric(results_coverage$area), "m2", "km2")) %>%
+  mutate(perc_osm_area = as.numeric(area_osm/area*100)) %>% 
+  mutate(perc_osm_points = nb_points/as.numeric(area_km2)) %>% 
+  st_centroid(geometry)
+
+st_write(results_coverage, "results/results_coverage.shp")
+```
+
+#### Map
+
+```{r map_results}
+world_map = ne_countries(scale = "medium", returnclass = "sf") %>% 
+  filter(name_sort != "Antarctica")
+
+world_map %>% 
+  ggplot() +
+  # world map 
+  geom_sf(fill = "#f0f0f1", color = "white", size = 0.2) +
+  # city points
+  geom_sf(data = results_coverage, 
+          aes(size = perc_osm_points,
+              fill = perc_osm_area),
+          color = "black",
+          shape = 21,
+          stroke = 0.1,
+          alpha = 1) +
+  scale_fill_distiller(palette = "YlOrRd",
+                        direction = 1) +
+  scale_size_continuous(range = c(2, 10)) +
+  # equal earth projection
+  coord_sf(crs = "+proj=eqearth") +
+  # theme
+  theme_void() +
+  theme(legend.position = "bottom",
+        legend.box = "vertical") +
+  labs(size = "Nombre de points / km²",
+       fill = "Surface couverte par OpenStreetMap (%)")
+
+ggsave("results/coverage_osm.svg", width = 4000, height = 2500, units = "px")
+```
