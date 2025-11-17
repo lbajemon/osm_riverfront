@@ -1,0 +1,178 @@
+---
+title: "Content analysis"
+author: "Liolia Bajemon"
+format: html
+editor: visual
+---
+
+### Set-up
+
+```{r read_packages}
+library(tidyverse)
+library(ggplot2)
+library(glue)
+library(patchwork)
+library(rsvg)
+library(grid)
+```
+
+### Prepare corpus
+
+```{r}
+corpus = read.csv("input_data/corpus_riverfront.csv")
+
+selection = c("Ahmedabad", "Brisbane", "Columbia, South Carolina", "Chanthaburi", "Détroit", "Rabat", "Fort Worth", "Patna", "Varanasi", "Thành Phố Hồ Chí Minh (Hô Chi Minh City)", "Nashville-Davidson", "Belém", "Kuching", "Petrolina", "Posadas", "Porto Alegre", "Melbourne", "Khabarovsk", "Bratislava", "Lyon", "Ottawa", "Gatineau", "Chicago",  "Langfang", "Washington, D.C.", "St. Louis")
+
+corpus = corpus %>% 
+  filter(urban_aggl %in% selection) %>% 
+  select(c("fid", "urban_aggl", "position", "link", "text", "text_en"))
+
+write.csv(corpus, "results/corpus_riverfronts.csv", row.names = FALSE)
+```
+
+### Results of the content analysis
+
+```{r}
+# selected cities
+villes = c("Ahmedabad", "Brisbane", "Columbia, South Carolina", "Chanthaburi", "Détroit", "Rabat", "Fort Worth", "Patna", "Varanasi", "Thành Phố Hồ Chí Minh (Hô Chi Minh City)", "Nashville-Davidson", "Belém", "Kuching", "Petrolina", "Posadas", "Porto Alegre", "Melbourne", "Khabarovsk", "Bratislava", "Lyon", "Ottawa", "Gatineau", "Chicago",  "Langfang", "Washington, D.C.", "St. Louis")
+
+# read corpus which was coded by hand
+data = readxl::read_xlsx("results/corpus_codage.xlsx") %>% 
+  filter(urban_aggl %in% villes) %>% 
+  select(-c("fid", "position", "link", "text", "text_en")) %>% 
+  mutate(urban_aggl = case_when(
+    urban_aggl == "Ottawa" ~ "Ottawa-Gatineau",
+    urban_aggl == "Gatineau" ~ "Ottawa-Gatineau",
+    urban_aggl == "Thành Phố Hồ Chí Minh (Hô Chi Minh City)" ~ "Ho Chi Minh City",
+    TRUE ~ urban_aggl
+  ))
+
+data_n_pages = data %>% 
+  group_by(urban_aggl) %>% 
+  mutate(n_pages = n()) %>% 
+  select(c("urban_aggl", "n_pages")) %>% 
+  unique()
+
+data_sum = data %>% 
+  group_by(urban_aggl) %>% 
+  summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) %>% 
+  left_join(data_n_pages, by = "urban_aggl") %>% 
+  mutate(across(2:18, ~ .x/n_pages*100))
+
+write.csv(data_sum, "results/data_corpus.csv", row.names = FALSE)
+```
+
+### Plots
+
+```{r}
+thematics = data.frame(thematic = c("Loisirs, tourisme", "Nature","Parc",
+                                    "Monument", "Industrie",
+                                    "Commerces, restaurants", "Chemin, promenade",
+                                    "Valeur esthétique", "Hors-sujet",
+                                    "Navigation", "Aménagement, accès à l'eau",
+                                    "Résidentiel", "Enjeux environnementaux",
+                                    "Religion", "Inondation", 
+                                    "Critique du projet","Aménité"),
+                       i = 1:17,
+                       mycolor = c("#f781bf", "#b3de69", "#f781bf", "#f781bf",
+                                   "#bf812d", "#f781bf", "#8dd3c7", "#ccebc5",
+                                   "lightgrey", "#8dd3c7", "#8dd3c7", "#eac1f7",
+                                   "#b3de69", "#fb8072", "#ccebc5", "#ccebc5", 
+                                   "#fdb462"))
+
+all_cities = sort(unique(data_sum$urban_aggl), decreasing = FALSE)
+```
+
+#### Order by alphabetical order of cities
+
+##### Individual plots 
+
+```{r def_barplot_function}
+thematic_barplot_alpha = function(thematic, i, mycolor){
+  
+  print(thematic)
+  
+  data = data_sum[,c(1,i+1)] 
+  colnames(data) = c("urban_aggl", "theme")
+  
+  data$urban_aggl = factor(data$urban_aggl, levels = rev(all_cities))
+  
+  # read file 
+  data %>% 
+      ggplot(aes(x = theme,
+                 y = urban_aggl)) +
+      geom_bar(stat = "identity",
+               fill = mycolor) +
+      xlim(0, 100) +
+      labs(title = thematic,
+           y = "",
+           x = "%") +
+      theme_bw()
+      
+  ggsave(glue("results/content_analysis_alphabetical/barplot_theme_{i}.svg"), width = 2000, height = 1300, units = "px")
+
+  print("barplot saved")
+}
+```
+
+```{r}
+pmap(list(thematics$thematic, thematics$i, thematics$mycolor),
+     thematic_barplot_alpha)
+```
+
+##### Big/combined plot
+
+```{r}
+make_big_barplot = function(thematic, i, mycolor){
+  
+  print(thematic)
+  
+  data = data_sum[,c(1,i+1)] 
+  colnames(data) = c("urban_aggl", "theme")
+  
+  data$urban_aggl = factor(data$urban_aggl, levels = rev(all_cities))
+  
+  # read file 
+  data %>% 
+      ggplot(aes(x = theme,
+                 y = urban_aggl)) +
+      geom_bar(stat = "identity",
+               fill = mycolor) +
+      xlim(0, 100) +
+      labs(title = thematic,
+           y = "",
+           x = "%") +
+      theme_bw()
+}
+
+plot_list = pmap(list(thematics$thematic, thematics$i, thematics$mycolor),
+                 make_big_barplot)
+wrap_plots(plot_list, nrow = 6, ncol = 3)
+
+ggsave("results/content_analysis_alphabetical/barplot_alpha3.svg", width = 350, height = 550, units = "mm")
+```
+
+### 
+
+```{r}
+# Let's get the percentage of pages which are about riverfronts or waterfronts in the corpus.
+
+corpus = read.csv("input_data/corpus.csv") 
+
+data_corpus = corpus %>% 
+  select(urban_aggl) %>% 
+  filter(urban_aggl %in% c("Ahmedabad", "Brisbane", "Columbia, South Carolina", "Chanthaburi", "Détroit", "Rabat", "Fort Worth", "Patna", "Varanasi", "Thành Phố Hồ Chí Minh (Hô Chi Minh City)", "Nashville-Davidson", "Belém", "Kuching", "Petrolina", "Posadas", "Porto Alegre", "Melbourne", "Khabarovsk", "Bratislava", "Lyon", "Ottawa", "Gatineau", "Chicago",  "Langfang", "Washington, D.C.", "St. Louis")) %>% 
+  mutate(urban_aggl = case_when(
+    urban_aggl == "Ottawa" ~ "Ottawa-Gatineau",
+    urban_aggl == "Gatineau" ~ "Ottawa-Gatineau",
+    urban_aggl == "Thành Phố Hồ Chí Minh (Hô Chi Minh City)" ~ "Ho Chi Minh City",
+    TRUE ~ urban_aggl
+  )) %>% 
+  group_by(urban_aggl) %>% 
+  summarise(n_corpus = n()) %>% 
+  left_join(data_sum[,c(1,19)], by = "urban_aggl") %>% 
+  mutate(perc_pages = n_pages/n_corpus*100) %>% 
+  select(c("urban_aggl", "perc_pages"))
+
+write.csv(data_corpus, "results/data_corpus_perc_pages.csv", row.names = FALSE)
+```
